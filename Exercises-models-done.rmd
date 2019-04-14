@@ -1,0 +1,290 @@
+---
+title: "Exercises, models"
+author: "Magnus, Carl, Jan, Victor & Anders"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(pacman)
+p_load(tidyverse, ggunchained, cowplot, signal, GENEAclassify)
+#signal for butterworth. 
+```
+
+#1. Remind yourselves what we did in the study and what we expected and why.
+Basically, participants where asked to "jump" over pillars using their mouse, with all of the pillars except one being the same height. In one condition the anomalous pillar was smaller, while in the other it was higher. 
+
+#2. Load one trial of your choice into R. The four columns refer to: sample, condition, x and y.
+
+#comment
+we should do a loop & then select one file. 
+```{r}
+
+#reading data
+data <- read.csv("21/21_1.txt", header = FALSE)
+colnames(data) <- c("sample", "condition", "x", "y")
+
+#all the data
+dataFiles <- lapply(Sys.glob("21/*.txt"), read.csv)
+
+```
+
+#3. Plot x against y
+```{r}
+
+ggplot(data, aes(x, y)) +
+    geom_point()+
+    labs(title = "vertical & horizontal (time?) movement") +
+    xlab("horizontal (time?) movement") + ylab("vertical movement") +
+    theme_janco_point()
+
+```
+
+#4. Map the y data to a more intuitive screen output with 0/0 in the lower left corner and where upwards movements are increasingly positive (i.e. so that it looks like the movements we made on the screen).
+
+#comment
+beginning at 0/0 is good. 
+she wanted a flip (which she already did. crazy). 
+
+```{r}
+#subtracting min-x & min-y
+data$x_center <- data$x - min(data$x)
+data$y_center <- data$y - min(data$y)
+
+#plotting 
+ggplot(data, aes(x_center, y_center)) +
+    geom_point()+
+    labs(title = "vertical & horizontal (time?) movement") +
+    xlab("horizontal movement (or time)") + ylab("vertical movement") +
+    theme_janco_point()
+
+```
+
+#5. Calculate the distance travelled (for x and y combined).
+
+```{r}
+data$diff <- sqrt((data$x-lag(data$x))^2+(data$y-lag(data$y))^2)
+sum(data$diff, na.rm = T)
+```
+
+#6. Add a time vector. I forgot to measure time so I had to estimate it post-hoc (fine for this exercise, not great if it was a real experiment). We can assume that each sample takes .0025 s
+
+```{r}
+sf <- 0.0025
+data$time <- sf * data$sample
+```
+
+#7. Calculate velocity and acceleration for y, i.e. vertical movement. Remember: Velocity = distance difference / time difference. Acceleration = velocity difference / time difference.
+
+#comments
+plot it properly.
+looks pretty cool & makes the zero-crossings intuitive. 
+
+```{r}
+#using the new values (I.e., centered)
+data$y_diff <- data$y_center-lag(data$y_center)
+data$y_vel <- data$y_diff / sf 
+data$y_acc <- (data$y_vel-lag(data$y_vel)) / sf 
+
+#plotting derivatives. 
+p1 <- ggplot(data, aes(x_center, y_diff)) +
+  geom_point() + 
+  labs(title = "raw movement", x = "horizontal movement, time?", 
+       y = "vertical movement") +
+  theme_janco_point()
+
+p2 <- ggplot(data, aes(x_center, y_vel)) +
+  geom_point()+
+  labs(title = "vertical velocity", x = "horizontal movement, time?", 
+       y = "vertical velocity") +
+  theme_janco_point()
+
+p3 <- ggplot(data, aes(x_center, y_acc)) +
+  geom_point() +
+  labs(title = "vertical accelaration", x = "horizontal movement, time?",
+       y = "vertical accelaration") +
+  theme_janco_point()
+
+#plotting together (mess).
+p4 <- ggplot(data, aes(x_center))+
+  geom_point(aes(y = y_diff), color = "blue")+
+  geom_point(aes(y = y_vel), color = "red") +
+  geom_point(aes(y = y_acc), color = "purple")+ #accelaration looks bad. 
+  theme_janco_point() +
+  labs(title = "raw, velocity, accelaration", 
+       subtitle = "blue = raw, red = velocity, purple = accelaration", 
+       x = "horizontal movement (time?)", 
+       y = "vertical movement")
+
+#plots in grid, notice differences in scales. 
+plot_grid(p1, p2, p3, p4)
+
+```
+
+#8. Play around with some filter to smoothen velocity and acceleration (most common: Butterworth filter).
+
+#comment
+--> solved filter & some plotting
+
+There is no big difference for velocity because the original data is super clean.
+However, as you will see in the plots there is a huge difference for acccelaration. 
+We are usign the filtfilt() instead of filter(). I think this has something to do with filtering "both ways" & also we are using a low-pass filter. The two first inputs to the function can be adjusted, but this seems ok. 
+
+```{r}
+# setup filter with low pass cutoff = 0.3, high pass cutoff = 30, sampling = 400/2
+# inspired by: https://dsp.stackexchange.com/questions/35986/how-do-we-use-signalfilter-and-signalbutter-in-r-for-eeg-data
+
+#setting the starting values. 
+bf <- signal::butter(2, 0.1, type="low")
+
+#filtering properly (both directions)
+f_yacc_filt <- signal::filtfilt(bf, data$y_acc)
+f_yvel_filt <- signal::filtfilt(bf, data$y_vel)
+
+#changed to accomodate new data
+d_acc <- tibble(y_acc_butter = f_yacc_filt,
+                index = 1:2913)
+
+d_vel <- tibble(y_vel_butter = f_yvel_filt,
+                index = 1:2913)
+
+#merging with original data & renaming for ease
+df <- cbind(data, d_acc$y_acc_butter)
+df <- cbind(df, d_vel$y_vel_butter)
+df <- df %>%
+  rename("y_vel_butter" = "d_vel$y_vel_butter", 
+         "y_acc_butter" = "d_acc$y_acc_butter") 
+  
+#plotting accelaration with original data. 
+p1 <- ggplot(df, aes(sample)) +
+  geom_line(aes(y = y_acc_butter), color = "red") + #filtered data (clearly better)
+  geom_line(aes(y = y_acc), color = "blue") + #raw data
+  xlab("time in 25ms") + ylab("vertical acceleration") +
+  labs(title = "vertical accelaration by time", 
+       caption = "(blue = raw data, red = filtered data...)") +
+  theme_janco_point()
+
+#zoomed plot to show difference. 
+p2 <- ggplot(df, aes(sample)) +
+  geom_line(aes(y = y_acc_butter), color = "red") +
+  geom_line(aes(y = y_acc), color = "blue") +
+  xlim(800, 1000) + ylim(-10000, 5000) +
+  xlab("time in 25ms") + ylab("vertical accelaration") +
+  labs(title = "zoomed plot of vertical accelaration by time", 
+       caption = "(blue = raw data, red = filtered data...)") +
+  theme_janco_point()
+
+#plotting velocity with original data. 
+p3 <- ggplot(df, aes(sample)) +
+  geom_line(aes(y = y_vel_butter), color = "red") + #filtered data (no sign. diff)
+  geom_line(aes(y = y_vel), color = "blue") + #raw data (already smooth)
+  xlab("time in 25ms") + ylab("vertical velocity") +
+  labs(title = "vertical velocity by time", 
+       caption = "(blue = raw data, red = filtered data...)") +
+  theme_janco_point()
+
+#zoomed plot to show difference. 
+p4 <- ggplot(df, aes(sample)) +
+  geom_line(aes(y = y_vel_butter), color = "red") +
+  geom_line(aes(y = y_vel), color = "blue") +
+  xlim(800, 1000) + ylim(0, 1500) +
+  xlab("time in 25ms") + ylab("vertical velocity") +
+  labs(title = "zoomed plot of vertical velocity by time", 
+       caption = "(blue = raw data, red = filtered data...)") +
+  theme_janco_point()
+
+#plots together, notice how smooth the raw velocity is & how much filtering helps for accelaration.  
+plot_grid(p1, p2, p3, p4)
+
+```
+
+We tried several packages offering different implementations of Butterworth filtering. Unfortunately, we only got the one from signal package to work.  
+Our filtering function of both velocity and acceleration was run using parameters we found online (link bellow). They are as follows: low pass cutoff = 0.3, high pass cutoff = 30. Sampling frequency is 1 data point per 0.0025 seconds, which adds up to 400 Hz.
+https://dsp.stackexchange.com/questions/35986/how-do-we-use-signalfilter-and-signalbutter-in-r-for-eeg-data
+Our filtering most likely did not work properly, because we used random parameters. Nevertheless, it seems that changing the parameters does not smoothen the wave, but merely changes it's scale. In other words, the range of Y-axis-velo
+
+#9. Using zero crossings in the acceleration, calculate velocity extreme values (maxima and minima). Mark those extreme values on top of the x/y plot you made earlier.
+
+#comment
+actually we also want to calculate the extremes in y-values (not y-values for velocity.) This is what she originally wanted. What we did was fine. 
+
+Filtering accelaration was an issue for most of us.
+This makes the data messy, and in turn messes up peak finding. 
+
+velocity is (in this case) quite clean without filtering, so this would have been easier. 
+
+Also, we should try to have different colors for maximum & minimum values. 
+
+```{r}
+#calculating extreme velocity values 
+df$zeros <- getZeros(df$y_acc_butter, len = 3) 
+df$extreme_y <- ifelse((df$y_acc_butter * lag(df$y_acc_butter) < 0 | df$zeros == TRUE) & abs(df$y_vel_butter) > 500, 1, 0) 
+extreme <- df %>% dplyr::filter(extreme_y == 1) 
+
+#plotting max velocity, perfection.  
+ggplot(df, aes(x_center, y_vel, color = factor(extreme_y))) +
+    geom_point(size = 1) +
+    geom_point(data=extreme, aes(x=x_center, y=y_vel), colour="blue", size=2) +
+    scale_x_continuous(breaks=seq(0, max(data$x_center), 50)) +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+    theme(legend.position = "none") +
+    theme_janco_point()
+
+#calculating extreme raw values 
+library(GENEAclassify)
+df$zerox <- getZeros(df$y_vel_butter, len = 3)
+df$extreme_yx <- ifelse((df$y_vel_butter * lag(df$y_vel_butter) < 0 | df$zerox == TRUE) & abs(df$y_center) > 100, 1, 0)
+extremex <- df %>% dplyr::filter(extreme_yx == 1)
+
+#plotting max raw
+ggplot(df, aes(x_center, y_center, color = factor(extreme_yx))) +
+    geom_point(size = 1) +
+    geom_point(data=extremex, aes(x=x_center, y=y_center), colour="blue", size=2) +
+    scale_x_continuous(breaks=seq(0, max(extreme$x_center), 50)) +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+    theme(legend.position = "none")
+
+
+```
+Because mouse-tracking data can vary in its resolution and sampling frequency, defining when a zero-crossing has happened is non-trivial. We created an algorithm that captures two different kinds zero-crossings and excludes instances where where the velocity is simply too low to be characterised as extreme. When plotting the y-velocities, it seems that our algorithm misses one extreme velocity value at around x_center ??? 600. The algorithm could probably be tuned to also capture this value, but out of the different algorithms we tried, this one seems to the best at capturing the velocity peaks without making too many assumptions 
+
+#10. Using e.g. a range of x positions, specify a segment during which the critical movement happens,
+i.e. the 6th movement is what we would want to compare in this study. Mark the peak in that segment in a different color.
+
+#comment
+working solutions
+1. max() - however, we are interested in local maxima. 
+2. specify range of x (hard-coding). 
+3. hard-coding is an issue because the data is messy
+solutions
+(1) more restricted experiment (however.. ecological validity?)
+(2) algorithmically: "give me the 6ths peak". However, also issues here. 
+(3) manually add/subtract in some cases (often the case "semi-automatic"). 
+We have to store peak (y-axis) and distance (x-axis), I.e., make a new data-frame or matrix to keep these values. loop more participants. 
+
+
+```{r}
+filter <- dplyr::filter
+
+min1 <- df %>% filter(x_center >= 800 & x_center <= 850)
+min2 <- df %>% filter(x_center >= 900 & x_center <= 950)
+df$AOI <- ifelse(df$sample >= min1[which.min(min1$y_center), ]$sample 
+                   & df$sample < min2[which.min(min2$y_center), ]$sample, 1, 0)
+
+max <- df %>% filter(x_center >= 850 & x_center <= 900)
+max2 <- max[which.max(max$y_center), ]$sample
+max3 <- df %>% filter(sample == max2) 
+
+ggplot(df, aes(x_center, y_center, color = factor(AOI))) +
+    geom_point() + 
+    geom_point() +
+    scale_x_continuous(breaks=seq(0, max(data$x_center), 50)) +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+    theme(legend.position = "none") +
+    geom_point(data = max3, colour = "black") +
+    geom_text(data = max3, label = "Maximum", colour = "black", vjust = -1, hjust = 0.35, size = 4, angle = 40) +
+    labs(title = "maximum in area of interest (AOI)", x = "x centered", y = "y centered") +
+    theme_janco_point()
+
+```
+
